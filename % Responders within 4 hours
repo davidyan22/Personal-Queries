@@ -1,0 +1,31 @@
+WITH Mobile_App_Responses AS (
+  -- To see the results select the line below and click Run Selected
+  [Mobile_App_Responses_v2]
+)
+
+SELECT
+  device_reg_time_period
+  , device_type
+  , 100 * SUM(
+      CASE
+        WHEN responses_within_4_hours > 0 THEN 1
+        ELSE 0
+      END
+    ) / NULLIF(COUNT(device_id)::numeric, 0) AS "% 4 hour responders / device"
+, 100 * SUM(
+      CASE
+        WHEN responses_with_resume_within_4_hours > 0 THEN 1
+        ELSE 0
+      END
+    ) / NULLIF(COUNT(device_id)::numeric, 0) AS "% 4 hour resume responders / device"
+,100 * SUM(
+      CASE
+        WHEN responses_with_profile_only_within_4_hours > 0 THEN 1
+        ELSE 0
+      END
+    ) ::float/ NULLIF(COUNT(device_id)::numeric, 0) AS "% 4 hour profile responders / device"
+
+FROM
+    Mobile_App_Responses
+GROUP BY 1, 2
+ORDER BY 1 DESC, 2
