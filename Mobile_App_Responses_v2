@@ -1,0 +1,611 @@
+with device_details as (
+SELECT
+  [d.create_time:pst:aggregation] AS device_reg_time_period
+  , d.device_type
+  , d.device_id
+  , d.create_time  
+  , case when count(distinct cs.contact_id) <> 0 then 1 else 0 end as is_scammer 
+
+from starterview.device d 
+  LEFT JOIN starterview.contact_device cd ON
+    d.device_id = cd.device_id
+LEFT JOIN starterview.contact_scammer cs
+  ON cd.contact_id = cs.contact_id
+
+  where
+      (d.device_type = 'Android'
+    OR d.device_type = 'iOS')
+and d.create_time > '2014-09-01'
+  
+  group by 1,2,3,4
+)
+
+
+select 
+  d.device_reg_time_period
+  , d.device_type
+  , d.device_id
+  , d.is_scammer 
+  , COUNT(DISTINCT cd.contact_id) AS all_contacts_for_device
+
+-- devices_without_contact
+  , CASE
+      WHEN COUNT(DISTINCT cd.contact_id) = 0 THEN 1
+      ELSE 0
+    END AS devices_without_contact
+
+-- signedin_app_users
+   , CASE
+       WHEN SUM(
+         CASE
+           WHEN c.create_time < d.create_time
+            THEN 1
+            ELSE 0
+         END
+       ) > 0 THEN 1
+       ELSE 0
+     END AS signedin_app_user
+
+-- registered_app_users
+   , CASE
+       WHEN SUM(
+         CASE
+           WHEN c.create_time > d.create_time
+            THEN 1
+            ELSE 0
+         END
+       ) > 0 THEN 1
+       ELSE 0
+     END AS registered_app_user
+
+-- devices_with_contact_without_response
+  , CASE
+      WHEN COUNT(DISTINCT cd.contact_id) > 0 AND COUNT(DISTINCT r.response_id) = 0 THEN 1
+      ELSE 0
+    END AS devices_with_contact_without_responses
+
+-- devices_with_responder
+  , CASE
+      WHEN COUNT(DISTINCT r.response_id) > 0 THEN 1
+      ELSE 0
+    END AS devices_with_responder
+
+-- responses_including_over_appliers_and_scammers
+  , COUNT(DISTINCT r.response_id)
+    AS all_responses_including_over_appliers_and_scammers
+
+-- scammer_responses
+  , CASE
+      WHEN is_scammer= 1 THEN COUNT(DISTINCT r.response_id)
+      ELSE 0
+    END AS scammer_responses
+
+-- over_applier_responses
+  , CASE
+      WHEN COUNT(DISTINCT r.response_id) > 100 THEN COUNT(DISTINCT r.response_id)
+      ELSE 0
+    END AS over_applier_responses
+
+-- For all calcuations below responses from scammers and over-appliers are ignored.
+
+-- responses (excluding scammers and over-appliers)
+, CASE
+      WHEN is_scammer = 0 
+AND COUNT(DISTINCT r.response_id) <= 100
+        THEN COUNT(DISTINCT r.response_id)
+      ELSE 0
+  END AS responses
+
+-- responses_with_resume (excluding scammers and over-appliers)
+, CASE
+      WHEN is_scammer = 0 
+          AND COUNT(DISTINCT r.response_id) <= 100
+        THEN COUNT(r.resume_upload_id)
+      ELSE 0
+  END AS responses_with_resume
+
+-- responses_without_resume (excluding scammers and over-appliers)
+, CASE
+      WHEN is_scammer = 0 
+          AND COUNT(DISTINCT r.response_id) <= 100
+        THEN
+          SUM(
+            CASE
+              WHEN r.resume_upload_id IS null AND r.response_id IS NOT null
+                THEN 1
+              ELSE 0
+            END
+          )
+      ELSE 0
+  END AS responses_without_resume
+
+-- responses_within_4_hours (excluding scammers and over-appliers)
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN datediff(MINUTE , d.create_time, r.create_time) < 240 THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_within_4_hours
+
+-- responses_with_resume_within_4_hours (excluding scammers and over-appliers)
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+            THEN 0
+      ELSE
+        SUM(
+          CASE
+            WHEN datediff(MINUTE , d.create_time, r.create_time) < 240
+                  AND r.resume_upload_id IS NOT null
+                    THEN 1
+            ELSE 0
+          END
+        )
+    END AS responses_with_resume_within_4_hours
+
+-- responses_after_4_hours_and_within_1_day
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            datediff(MINUTE , d.create_time, r.create_time) >= 240
+            AND datediff(MINUTE , d.create_time, r.create_time) < 1440
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_after_4_hours_and_within_1_day
+
+-- responses_with_resume_after_4_hours_and_within_1_day
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            datediff(MINUTE , d.create_time, r.create_time) >= 240
+            AND datediff(MINUTE , d.create_time, r.create_time) < 1440
+            AND r.resume_upload_id IS NOT null
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_with_resume_after_4_hours_and_within_1_day
+
+-- responses_after_1_day_and_within_1_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            datediff(MINUTE , d.create_time, r.create_time) >= 1440
+            AND datediff(MINUTE , d.create_time, r.create_time) < 10080
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_after_1_day_and_within_1_week
+
+-- responses_with_resume_after_1_day_and_within_1_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            datediff(MINUTE , d.create_time, r.create_time) >= 1440
+            AND datediff(MINUTE , d.create_time, r.create_time) < 10080
+            AND r.resume_upload_id IS NOT null
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_with_resume_after_1_day_and_within_1_week
+
+-- responses_after_first_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN datediff(MINUTE , d.create_time, r.create_time) >= 10080 THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_after_first_week
+
+-- responses_with_resume_after_first_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN datediff(MINUTE , d.create_time, r.create_time) >= 10080
+            AND r.resume_upload_id IS NOT null
+               THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_with_resume_after_first_week
+  
+-- responses_after_reg_within_1_week --NEW 
+   , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+             datediff(MINUTE , d.create_time, r.create_time) < 10080
+            AND c.create_time > d.create_time
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_after_reg_within_1_week
+  
+-- responses_after_reg_with_resume_within_1_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            r.resume_upload_id IS NOT null
+            AND datediff(MINUTE , d.create_time, r.create_time) < 10080
+            AND c.create_time > d.create_time
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_after_reg_with_resume_within_1_week
+  
+-- responses_after_signin_within_1_week -- new 
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+             datediff(MINUTE , d.create_time, r.create_time) < 10080
+            AND c.create_time < d.create_time
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_after_signin_within_1_week  
+  
+-- responses_after_signin_with_resume_within_1_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            r.resume_upload_id IS NOT null
+            AND datediff(MINUTE , d.create_time, r.create_time) < 10080
+            AND c.create_time < d.create_time
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_after_signin_with_resume_within_1_week
+---------------NEW 
+-- -- only counting profile responses after 28th of August 
+
+-- -- responses_with_profile_and_resume (excluding scammers and over-appliers)
+-- , CASE
+--       WHEN COUNT(DISTINCT cs.contact_id) = 0
+--           AND COUNT(DISTINCT r.response_id) <= 100
+--         THEN 
+--         COUNT ( CASE WHEN r.resume_upload_id IS NOT null 
+--           AND cp.create_time >= '2018-08-30'
+--           AND r.create_time >= '2018-08-30' THEN cp.contact_id ELSE null END )
+--       ELSE 0
+--   END AS responses_with_profile_and_resume
+
+-- responses_with_profile_only (excluding scammers and over-appliers)
+, CASE
+      WHEN is_scammer = 0
+          AND COUNT(DISTINCT r.response_id) <= 100
+        THEN
+          SUM(
+            CASE
+              WHEN r.resume_upload_id IS null 
+              and cp.is_one_click_apply_eligible= 1 
+              AND r.create_time>= '2018-08-30'       
+                THEN 1
+              ELSE 0
+            END
+          )
+      ELSE 0
+  END AS responses_with_profile_only
+
+  
+-- -- responses_with_profile_and_resume_within_4_hours (excluding scammers and over-appliers)
+--   , CASE
+--       -- Don't count over appliers OR scammers
+--       WHEN COUNT(DISTINCT r.response_id) > 100
+--           OR COUNT(DISTINCT cs.contact_id) <> 0
+--             THEN 0
+--       ELSE
+--         COUNT(
+--           CASE
+--             WHEN datediff(MINUTE , d.create_time, r.create_time) < 240
+--                   AND r.resume_upload_id IS NOT null
+--                   AND cp.create_time >= '2018-08-30'
+--                   AND r.create_time >= '2018-08-30' 
+--                   THEN   cp.contact_id            
+--                ELSE null 
+--           END
+--         )
+--     END AS responses_with_resume_profile_within_4_hours
+
+-- responses_with_profile_only_within_4_hours (excluding scammers and over-appliers)
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+            THEN 0
+      ELSE
+        COUNT(
+          CASE
+            WHEN datediff(MINUTE , d.create_time, r.create_time) < 240
+                  AND r.resume_upload_id IS  null
+                  and cp.is_one_click_apply_eligible= 1 
+                  AND r.create_time >= '2018-08-30' 
+                  THEN   cp.contact_id 
+            ELSE null END
+        )
+    END AS responses_with_profile_only_within_4_hours
+
+
+
+-- responses_with_profile_and_resume_after_4_hours_and_within_1_day
+--   , CASE
+--       -- Don't count over appliers OR scammers
+--       WHEN COUNT(DISTINCT r.response_id) > 100
+--           OR COUNT(DISTINCT cs.contact_id) <> 0
+--         THEN 0
+--       ELSE SUM(
+--         CASE
+--           WHEN
+--             datediff(MINUTE , d.create_time, r.create_time) >= 240
+--             AND datediff(MINUTE , d.create_time, r.create_time) < 1440
+--             AND r.resume_upload_id IS NOT null
+--             AND cp.create_time >= '2018-08-30'
+--            AND r.create_time >= '2018-08-30'
+--               THEN 1
+--           ELSE 0
+--         END
+--       )
+--     END AS responses_with_resume_profile_after_4_hours_and_within_1_day
+
+-- responses_with_profile_only_after_4_hours_and_within_1_day
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            datediff(MINUTE , d.create_time, r.create_time) >= 240
+            AND datediff(MINUTE , d.create_time, r.create_time) < 1440
+            AND r.resume_upload_id IS null
+            and cp.is_one_click_apply_eligible= 1 
+            AND r.create_time >= '2018-08-30'
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_with_profile_only_after_4_hours_and_within_1_day
+
+-- responses_with_resume_profile_after_1_day_and_within_1_week
+--   , CASE
+--       -- Don't count over appliers OR scammers
+--       WHEN COUNT(DISTINCT r.response_id) > 100
+--           OR COUNT(DISTINCT cs.contact_id) <> 0
+--         THEN 0
+--       ELSE SUM(
+--         CASE
+--           WHEN
+--             datediff(MINUTE , d.create_time, r.create_time) >= 1440
+--             AND datediff(MINUTE , d.create_time, r.create_time) < 10080
+--             AND r.resume_upload_id IS NOT null
+--             AND cp.create_time >= '2018-08-30'
+--             AND r.create_time >= '2018-08-30'
+--               THEN 1
+--           ELSE 0
+--         END
+--       )
+--     END AS responses_with_resume_profile_after_1_day_and_within_1_week
+
+
+-- responses_with_profile_only_after_1_day_and_within_1_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            datediff(MINUTE , d.create_time, r.create_time) >= 1440
+            AND datediff(MINUTE , d.create_time, r.create_time) < 10080
+            AND r.resume_upload_id IS NULL
+            and cp.is_one_click_apply_eligible= 1 
+            AND r.create_time >= '2018-08-30'
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_with_profile_only_after_1_day_and_within_1_week
+
+-- responses_with_resume_profile_after_first_week
+--   , CASE
+--       -- Don't count over appliers OR scammers
+--       WHEN COUNT(DISTINCT r.response_id) > 100
+--           OR is_scammer = 1
+--         THEN 0
+--       ELSE SUM(
+--         CASE
+--           WHEN datediff(MINUTE , d.create_time, r.create_time) >= 10080
+--             AND r.resume_upload_id IS NOT NULL
+--             AND cp.create_time >= '2018-08-30'
+--             AND r.create_time >= '2018-08-30'
+--                THEN 1
+--           ELSE 0
+--         END
+--       )
+--     END AS responses_with_resume_profile_after_first_week
+
+-- responses_with_profile_only_after_first_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN datediff(MINUTE , d.create_time, r.create_time) >= 10080
+            AND r.resume_upload_id IS NULL
+            and cp.is_one_click_apply_eligible= 1 
+            AND r.create_time >= '2018-08-30'
+               THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_with_profile_only_after_first_week
+
+-- responses_after_reg_with_resume_profile_within_1_week
+--   , CASE
+--       -- Don't count over appliers OR scammers
+--       WHEN COUNT(DISTINCT r.response_id) > 100
+--           OR is_scammer = 1
+--         THEN 0
+--       ELSE SUM(
+--         CASE
+--           WHEN
+--             r.resume_upload_id IS NOT null
+--             AND datediff(MINUTE , d.create_time, r.create_time) < 10080
+--             AND c.create_time > d.create_time
+--             AND cp.create_time >= '2018-08-30'
+--             AND r.create_time >= '2018-08-30'
+--               THEN 1
+--           ELSE 0
+--         END
+--       )
+--     END AS responses_after_reg_with_resume_profile_within_1_week
+
+-- responses_after_reg_with_profile_within_1_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            r.resume_upload_id IS NULL
+            AND datediff(MINUTE , d.create_time, r.create_time) < 10080
+            AND c.create_time > d.create_time
+            and cp.is_one_click_apply_eligible= 1            
+            AND r.create_time >= '2018-08-30'
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_after_reg_with_profile_only_within_1_week
+
+-- responses_after_reg_with_resume_profile_within_1_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            r.resume_upload_id IS NOT null
+            AND datediff(MINUTE , d.create_time, r.create_time) < 10080
+            AND c.create_time < d.create_time
+           AND cp.create_time >= '2018-08-30'
+            AND r.create_time >= '2018-08-30'
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_after_signin_with_resume_profile_within_1_week
+
+-- responses_after_reg_with_profile_within_1_week
+  , CASE
+      -- Don't count over appliers OR scammers
+      WHEN COUNT(DISTINCT r.response_id) > 100
+          OR is_scammer = 1
+        THEN 0
+      ELSE SUM(
+        CASE
+          WHEN
+            r.resume_upload_id IS null
+            AND datediff(MINUTE , d.create_time, r.create_time) < 10080
+            AND c.create_time < d.create_time
+            and cp.is_one_click_apply_eligible= 1 
+            AND r.create_time >= '2018-08-30'
+              THEN 1
+          ELSE 0
+        END
+      )
+    END AS responses_after_signin_with_profile_only_within_1_week
+
+
+-----------------
+
+FROM
+    device_details d
+LEFT JOIN starterview.contact_device cd ON
+    d.device_id = cd.device_id
+LEFT JOIN starterview.contact c
+  ON cd.contact_id = c.contact_id
+LEFT JOIN starterview.response r
+  ON r.contact_id = cd.contact_id
+    AND (
+      r.apply_method = 'Mobile App Android'
+      OR lower(r.apply_method) like  '%ios%'
+    )
+left join starterview.contact_profile cp  
+on cd.contact_id = cp.contact_id
+WHERE
+  [d.create_time=daterange]
+
+GROUP BY 1, 2, 3 ,4
+ORDER BY 1 DESC, 2
