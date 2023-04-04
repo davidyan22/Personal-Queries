@@ -1,0 +1,46 @@
+-- HOWTO Release dashboard to PROD
+-- 1) Save as Copy
+-- 2) Move *copied* chart from to PROD dashboard using dashboard dropdown in upper right
+-- 3) In *PROD* dashboard delete the old PROD version
+WITH combined AS (
+  SELECT
+      d.device_type
+    , [d.create_time:pst:aggregation]         AS day
+    , COUNT(DISTINCT d.device_id)             AS app_installs_total
+    , 0                                       AS notifications_sent
+    , 0                                       AS notifications_opened
+  FROM prod_starterview.device d
+    LEFT JOIN prod_starterview.contact_device dc
+      ON d.device_id = dc.device_id
+  WHERE [d.create_time=daterange]
+  GROUP BY 2, 1
+
+  UNION
+  
+  SELECT
+      d.device_type
+    , [n.sent_time:pst:aggregation]           AS day
+    , 0                                       AS app_installs_total
+    , COUNT(*)                                AS notifications_sent
+    , COUNT(n.open_time)                      AS notifications_opened
+  FROM prod_log_data.notification n
+    JOIN prod_starterview.device d
+      ON n.device_id = d.device_id
+    LEFT JOIN prod_starterview.contact_device dc
+      ON n.device_id = dc.device_id
+     AND n.sent_time >= dc.create_time
+  WHERE [n.sent_time=daterange]
+  AND log_date >= 20190101
+  GROUP BY 2, 1
+)
+
+SELECT
+    day                                 AS "Year-Month-Day"
+  , COALESCE(lower(device_type), '-- ALL --')  AS "Device Type"
+  , CASE WHEN (SUM(notifications_sent) = 0) THEN 0 ELSE
+      CAST(100 * SUM(notifications_opened) AS DOUBLE) / CAST(SUM(notifications_sent) AS DOUBLE)
+    END AS "Pct of All Notifications Opened"
+FROM combined
+GROUP BY 1, 2
+HAVING SUM(notifications_sent) > 100
+ORDER BY 1 DESC, 2
