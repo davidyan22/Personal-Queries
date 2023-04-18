@@ -1,0 +1,17 @@
+select
+    d.apply_id
+    , d.apply_create_date_utc
+    , d.built_for_viewer_id
+    , date_parse(d.apply_create_date_utc, '%Y%m%d')
+  from interactions.dim_apply as d
+  join prod_clicks.itm_jobsworth_accounting_clicks_by_day as cl on
+    d.click_id = cl.click_id
+  where
+    d.apply_subtype = '1-click'
+    and cl.is_1_click_apply = False
+    and date_parse(d.apply_create_date_utc, '%Y%m%d') between cast('2023-01-09' as date) and cast('2023-01-15' as date)
+    and cl.log_date_la >= cast('2023-01-01' as date)
+    
+    LIMIT 1 
+    
+
