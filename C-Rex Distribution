@@ -1,0 +1,45 @@
+with
+  crex_placements as (
+    [crex_placements]
+  )
+  , clicks_detailed as (
+    select
+      cl.click_id, 
+      o.sort_position
+      , dim_campaign.buyer_type
+      , cl.click_timestamp as click_time
+      , date(date_trunc('week', cast(click_timestamp as timestamp))) as click_date
+      , cp.placement
+      , cp.platform
+    from
+      prod_clicks.vw_fact_accounting_clicks cl
+      join crex_placements cp on
+        cl.placement_id = cp.placement_id
+      join campaigns.dim_campaign on
+        dim_campaign.campaign_id = cl.campaign_id
+      join (
+      SELECT impression_id, sort_position 
+      FROM interactions.ocd_impressions_v1 
+      WHERE create_date_utc BETWEEN '20230410' AND '20230417'
+      ) o on cl.impression_id = o.impression_id
+    where
+      cl.click_timestamp BETWEEN DATE('2023-04-10') AND DATE('2023-04-17')
+      and cl.genuine_click = 1
+      and cl.listing_key is not null
+      and cl.built_for_viewer_realm = 'sv_contact'
+  )
+  , clicks_by_group as (
+    select
+      click_date,
+      sort_position,
+      placement, 
+      count(distinct click_id) as clicks
+    from
+      clicks_detailed
+    group by 1,2,3
+  )
+select
+  *
+from
+  clicks_by_group
+ORDER BY sort_position
